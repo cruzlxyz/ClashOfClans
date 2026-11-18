@@ -1,0 +1,23 @@
+name: "Clash Of Clans"
+label: "Clash Of Clans"
+kind: standalone
+version: 1.0.0
+author: "Hermes Agent (for 0xcruzl)"
+description: >
+  Clash of Clans tools built on the official Supercell API.
+  Seven intent tools cover all 35 documented endpoints plus a village-export
+  timer parser. Token game is used only for one-time identity verification;
+  the developer JWT is used for every data endpoint.
+requires_hermes: ">=0.21.5"
+provides_tools:
+  - coc_verify
+  - coc_player
+  - coc_clan
+  - coc_league
+  - coc_ranks
+  - coc_meta
+  - coc_timer
+provides_hooks: []
+requires_env: []
+optional_env:
+  - COC_API_TOKEN
