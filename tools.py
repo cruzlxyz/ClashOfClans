@@ -2,7 +2,7 @@
 
 Six tools wrap the 35 documented Supercell API endpoints; one parses the
 in-game village export for upgrade timers. All handlers retrieve data or parse
-local exports. Tokens are loaded from .env, never printed.
+local exports. Tokens are loaded from Hermes secrets, never printed.
 """
 
 from __future__ import annotations
@@ -25,14 +25,14 @@ except Exception:  # pragma: no cover - validator/isolated probe may lack the ho
 
 TOOLSET = "Clash Of Clans"
 HERE = Path(__file__).resolve().parent
-STATE_DIR = HERE / "state"
+STATE_DIR = (
+    Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+    / "plugin-data" / "clash-of-clans"
+)
 MAP_FILE = HERE / "mapping.json"
 BASE = "https://api.clashofclans.com/v1"
 UA = "Hermes Clash Of Clans/1.0"
 WIB = ZoneInfo("Asia/Jakarta")
-DEFAULT_TAG = "#R0LYP009Y"
-DEFAULT_CLAN = "#2CGGQ8Y0J"
-DEFAULT_EXPORT = "/home/ubuntu/coc-export.json"
 
 _MAP_CACHE: dict | None = None
 
@@ -41,15 +41,14 @@ _MAP_CACHE: dict | None = None
 # environment / HTTP helpers
 # --------------------------------------------------------------------------
 def _token() -> str:
-    """Resolve the developer JWT through Hermes' secret scope (catalog rule 11)."""
-    if get_secret is not None:
-        try:
-            value = get_secret("COC_API_TOKEN", "")
-            if value:
-                return str(value).strip()
-        except Exception:
-            pass
-    return os.getenv("COC_API_TOKEN", "").strip()
+    """Resolve the developer JWT through Hermes' secret scope (catalog rule 11).
+
+    Only get_secret is consulted: an os.getenv fallback would leak the launch
+    profile's key into other profiles served by the same Hermes process.
+    """
+    if get_secret is None:
+        return ""
+    return str(get_secret("COC_API_TOKEN", "") or "").strip()
 
 
 def _check() -> bool:
@@ -63,7 +62,7 @@ def _check_timer() -> bool:
 def _request(method: str, path: str, body: dict | None = None) -> dict:
     tok = _token()
     if not tok:
-        return {"status": 0, "data": {"message": "COC_API_TOKEN belum diset di .env"}}
+        return {"status": 0, "data": {"message": "COC_API_TOKEN is not set. Add it via Hermes secrets (hermes config / dashboard Keys)."}}
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE + path, data=data, method=method,
@@ -134,10 +133,12 @@ def _name(section: str, ident: object) -> str:
 # 1. coc_verify — identity gate (the only game-token tool)
 # --------------------------------------------------------------------------
 def coc_verify(args: dict, **kwargs) -> str:
-    tag = args.get("tag") or DEFAULT_TAG
+    tag = str(args.get("tag") or "").strip()
+    if not tag:
+        return _err("tag is required — the player tag to verify, e.g. #ABC123")
     token = args.get("token") or ""
     if not token:
-        return _err("token wajib diisi — token game dari Settings → More Settings → API Token")
+        return _err("token is required — copy the one-time API token from the game: Settings → More Settings → API Token")
     r = _request("POST", f"/players/{_enc(tag)}/verifytoken", {"token": token})
     status = (r.get("data") or {}).get("status")
     return _dump({
@@ -145,7 +146,7 @@ def coc_verify(args: dict, **kwargs) -> str:
         "http": r.get("status"),
         "status": status,
         "verified": status == "ok",
-        "note": "Token game sekali pakai — jangan disimpan.",
+        "note": "The in-game token is one-time use — do not store it.",
     })
 
 
@@ -153,14 +154,16 @@ def coc_verify(args: dict, **kwargs) -> str:
 # 2. coc_player — profile + battle log + league history
 # --------------------------------------------------------------------------
 def coc_player(args: dict, **kwargs) -> str:
-    tag = args.get("tag") or DEFAULT_TAG
+    tag = str(args.get("tag") or "").strip()
+    if not tag:
+        return _err("tag is required — the player tag to look up, e.g. #ABC123")
     r = _parallel({
         "p": ("GET", f"/players/{_enc(tag)}", None),
         "b": ("GET", f"/players/{_enc(tag)}/battlelog", None),
         "l": ("GET", f"/players/{_enc(tag)}/leaguehistory", None),
     })
     if r["p"]["status"] != 200:
-        return _dump({"error": "player fetch gagal", "http": r["p"]["status"],
+        return _dump({"error": "player fetch failed", "http": r["p"]["status"],
                       "detail": r["p"]["data"]})
     p = r["p"]["data"]
     recent = []
@@ -197,8 +200,10 @@ def coc_player(args: dict, **kwargs) -> str:
 # 3. coc_clan — clan, members, war, war log, CWL, capital raids
 # --------------------------------------------------------------------------
 def coc_clan(args: dict, **kwargs) -> str:
-    tag = args.get("tag") or DEFAULT_CLAN
-    me = args.get("player_tag") or DEFAULT_TAG
+    tag = str(args.get("tag") or "").strip()
+    if not tag:
+        return _err("tag is required — the clan tag to look up, e.g. #ABC123")
+    me = str(args.get("player_tag") or "").strip()
     jobs = {
         "c": ("GET", f"/clans/{_enc(tag)}", None),
         "m": ("GET", f"/clans/{_enc(tag)}/members", None),
@@ -252,7 +257,7 @@ def coc_clan(args: dict, **kwargs) -> str:
                           "opponent": (w.get("opponent") or {}).get("name"),
                           "clanStars": (w.get("clan") or {}).get("stars"),
                           "opponentStars": (w.get("opponent") or {}).get("stars")} for w in warlog],
-        "leaguegroup": "aktif" if r["g"]["status"] == 200 else "tidak aktif",
+        "leaguegroup": "active" if r["g"]["status"] == 200 else "inactive",
         "cwlWar": cwl,
         "capitalRaidCount": len(r["r"]["data"].get("items") or []),
     })
@@ -262,7 +267,9 @@ def coc_clan(args: dict, **kwargs) -> str:
 # 4. coc_league — league tiers, seasons, ranked league group
 # --------------------------------------------------------------------------
 def coc_league(args: dict, **kwargs) -> str:
-    tag = args.get("player_tag") or DEFAULT_TAG
+    tag = str(args.get("player_tag") or "").strip()
+    if not tag:
+        return _err("player_tag is required — the player tag to look up, e.g. #ABC123")
     p = _request("GET", f"/players/{_enc(tag)}")
     pd = p["data"] if p["status"] == 200 else {}
     group = pd.get("currentLeagueGroupTag")
@@ -318,7 +325,7 @@ def coc_ranks(args: dict, **kwargs) -> str:
         loc = items[0] if items else {}
     lid = loc.get("id")
     if not lid:
-        return _dump({"error": "lokasi tidak ditemukan"})
+        return _dump({"error": "location not found"})
     paths = {
         "clans": f"/locations/{lid}/rankings/clans?limit={limit}",
         "players": f"/locations/{lid}/rankings/players?limit={limit}",
@@ -377,16 +384,18 @@ def coc_meta(args: dict, **kwargs) -> str:
 # 7. coc_timer — village export parser (no API, no token)
 # --------------------------------------------------------------------------
 def coc_timer(args: dict, **kwargs) -> str:
-    path = str(args.get("path") or DEFAULT_EXPORT)
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return _err("path is required — path to the exported village JSON file")
     alarm_h = int(args.get("alarm_hours") or 1)
     alarm_m = int(args.get("alarm_minutes") or 15)
     save = bool(args.get("save", True))
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except Exception as e:
-        return _err(f"gagal baca export: {e}")
+        return _err(f"failed to read export: {e}")
     if "timestamp" not in data:
-        return _err("export tidak punya field timestamp")
+        return _err("export has no timestamp field")
     base = int(data["timestamp"])
     now = int(time.time())
     items: list[dict] = []
@@ -452,10 +461,10 @@ def coc_timer(args: dict, **kwargs) -> str:
         "count": len(items),
         "items": items,
         "caveats": [
-            "helper_recurrent bisa mempercepat akhir",
-            "Clock Tower bisa mempercepat timer Builder Base",
-            "potion/book/gem finish butuh export ulang",
-            "ID tak dikenal dilaporkan apa adanya",
+            "helper_recurrent can shorten the finish time",
+            "Clock Tower can shorten Builder Base timers",
+            "potion/book/gem finishes require a fresh export",
+            "unknown IDs are reported as-is",
         ],
     }
     if save:
@@ -477,31 +486,31 @@ SCHEMAS = {
         "name": "coc_verify",
         "description": "Verify CoC account ownership with the one-time in-game API token. Use for /link.",
         "parameters": {"type": "object", "properties": {
-            "tag": {"type": "string", "description": "Player tag", "default": DEFAULT_TAG},
+            "tag": {"type": "string", "description": "Player tag to verify, e.g. #ABC123"},
             "token": {"type": "string", "description": "One-time API token copied from the game"},
-        }, "required": ["token"]},
+        }, "required": ["tag", "token"]},
     },
     "coc_player": {
         "name": "coc_player",
         "description": "Player profile, hero levels, recent battles and league history.",
         "parameters": {"type": "object", "properties": {
-            "tag": {"type": "string", "description": "Player tag", "default": DEFAULT_TAG},
-        }},
+            "tag": {"type": "string", "description": "Player tag to look up, e.g. #ABC123"},
+        }, "required": ["tag"]},
     },
     "coc_clan": {
         "name": "coc_clan",
         "description": "Clan overview, members, current war, war log, CWL and capital raids.",
         "parameters": {"type": "object", "properties": {
-            "tag": {"type": "string", "description": "Clan tag", "default": DEFAULT_CLAN},
-            "player_tag": {"type": "string", "description": "Player to highlight in war", "default": DEFAULT_TAG},
-        }},
+            "tag": {"type": "string", "description": "Clan tag to look up, e.g. #ABC123"},
+            "player_tag": {"type": "string", "description": "Optional player tag to highlight in war"},
+        }, "required": ["tag"]},
     },
     "coc_league": {
         "name": "coc_league",
         "description": "League tier, ranked league group and league/season catalog counts.",
         "parameters": {"type": "object", "properties": {
-            "player_tag": {"type": "string", "description": "Player tag", "default": DEFAULT_TAG},
-        }},
+            "player_tag": {"type": "string", "description": "Player tag to look up, e.g. #ABC123"},
+        }, "required": ["player_tag"]},
     },
     "coc_ranks": {
         "name": "coc_ranks",
@@ -520,11 +529,11 @@ SCHEMAS = {
         "name": "coc_timer",
         "description": "Parse in-game village export JSON into upgrade finish times and alarms.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Path to exported village JSON", "default": DEFAULT_EXPORT},
+            "path": {"type": "string", "description": "Path to the exported village JSON file"},
             "alarm_hours": {"type": "integer", "description": "Early alarm hours", "default": 1},
             "alarm_minutes": {"type": "integer", "description": "Early alarm minutes", "default": 15},
             "save": {"type": "boolean", "description": "Write parsed state to upgrades.json", "default": True},
-        }},
+        }, "required": ["path"]},
     },
 }
 

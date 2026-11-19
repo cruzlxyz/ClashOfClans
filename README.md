@@ -43,7 +43,7 @@ Two different credentials are involved. They are **not interchangeable**.
 
 | Credential | Where it comes from | Used by | Stored? |
 |---|---|---|---|
-| **Developer JWT** | [Supercell developer portal](https://developer.clashofclans.com/) | All six data tools | Yes, as `COC_API_TOKEN` in `~/.hermes/.env` |
+| **Developer JWT** | [Supercell developer portal](https://developer.clashofclans.com/) | All six data tools | Yes, as `COC_API_TOKEN` in Hermes secrets (`hermes config` / dashboard Keys) |
 | **One-time game token** | Inside the game: `Settings → More Settings → API Token` | `coc_verify` only | No, discarded after verification |
 | **No credential** | Village export JSON | `coc_timer` | Optional export file |
 
@@ -59,7 +59,7 @@ This token authenticates the plugin to Supercell's official API. Create it as fo
    - **Description:** `Hermes Clash Of Clans plugin`
    - **Allowed IP:** the public IP of the machine running Hermes
 5. Create the key and copy the JWT.
-6. Store it as `COC_API_TOKEN` in `~/.hermes/.env`.
+6. Store it as `COC_API_TOKEN` in Hermes secrets — via `hermes config` or the dashboard Keys page (not a plain `.env` file).
 
 Check the public IP of the machine that runs Hermes:
 
@@ -115,7 +115,7 @@ Copy the village export from inside the game:
 Settings → More Settings → Export village data in JSON format → Copy
 ```
 
-Save it, for example, to `/home/ubuntu/coc-export.json`, or paste it directly into Hermes.
+Save it, for example, to `~/coc-export.json`, or paste it directly into Hermes.
 
 ---
 
@@ -275,7 +275,7 @@ The plugin is installed at:
 Validate it:
 
 ```bash
-hermes plugins validate "/home/ubuntu/.hermes/plugins/Clash Of Clans"
+hermes plugins validate ~/.hermes/plugins/clash-of-clans
 ```
 
 Enable it:
@@ -305,7 +305,7 @@ Current status: **enabled and verified on Hermes v0.23.2**.
 
 ## Security and privacy
 
-- The developer JWT stays in `~/.hermes/.env` with mode `600`.
+- The developer JWT stays in Hermes secrets, resolved only through `get_secret` — never read from the process environment.
 - The game token is consumed once and never stored.
 - Never paste the JWT into a chat or public repository. Rotate it if exposed.
 - The plugin only reads data. It does not modify an account or a village.

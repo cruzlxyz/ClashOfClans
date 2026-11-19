@@ -1,4 +1,4 @@
-name: "Clash Of Clans"
+name: clash-of-clans
 label: "Clash Of Clans"
 kind: standalone
 version: 1.0.0
@@ -18,6 +18,6 @@ provides_tools:
   - coc_meta
   - coc_timer
 provides_hooks: []
-requires_env: []
-optional_env:
+requires_env:
   - COC_API_TOKEN
+optional_env: []
